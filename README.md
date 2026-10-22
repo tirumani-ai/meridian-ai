@@ -70,8 +70,6 @@ The sample company, *Aldermoor Industries*, and the documents in `sample_docs/` 
 - **Structured logging.** Every event is one JSON line, which makes failures searchable locally and in Cloud Storage.
 - **Infrastructure via GitHub Actions + `gcloud`.** No Terraform; the workflow provisions the bucket, vector index, endpoint and Cloud Run service idempotently.
 
-More detail on the trade-offs is in [docs/17-why-built-this-way.md](docs/17-why-built-this-way.md) and [docs/20-local-cloud-and-middleware.md](docs/20-local-cloud-and-middleware.md).
-
 ---
 
 ## Repository layout
@@ -99,7 +97,6 @@ backend/
 
 frontend/                     React + TypeScript UI (src/lib/api.ts is the only API client)
 sample_docs/                  Four fictional PDFs for trying the app
-docs/                         Architecture and component notes, runnable examples in docs/examples/
 .github/workflows/deploy.yml  Provisioning + deploy pipeline
 Dockerfile                    Production image
 DEPLOY.md                     Google Cloud deployment guide
@@ -247,8 +244,6 @@ If you get "model not found", set `VERTEX_LLM_MODEL_NAME` to a current model fro
 | CORS error in the browser | The backend is not running on port 8080 |
 
 The backend logs one JSON line per event; the failing step is usually in the last few lines.
-
-More: [docs/18-troubleshooting.md](docs/18-troubleshooting.md).
 
 ---
 
