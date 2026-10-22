@@ -1,327 +1,257 @@
 # Meridian AI
 
-A small web app that does two jobs, using AI:
+Meridian AI is a FastAPI + React application that combines two GenAI patterns behind one API:
 
-1. **Ask questions about your documents.** Upload PDFs (policies, contracts, reports), then ask in plain English. The app answers using only what is in your documents.
-2. **Check a purchase before paying.** Paste a purchase request. Three AI "specialists" review it (risk, tax, accounting). A final "CFO" step writes one short memo with a decision.
+1. **Document Q&A (RAG).** Upload PDFs (policies, contracts, reports) and ask questions in natural language. Answers are grounded only in the retrieved document chunks; out-of-scope questions get an explicit "I don't know".
+2. **Multi-agent purchase audit.** A purchase request is reviewed by three tool-using LangChain agents (risk, tax, internal control). A final CFO step synthesises their reports into one memo with a decision: **approved**, **conditional hold**, or **rejected**.
 
-It is built to **learn from**. The company in the examples, *Aldermoor Industries*, is **fictional**, and the sample documents contain made-up data.
+The same codebase runs **fully local** (Gemini API + Chroma) or **on Google Cloud** (Vertex AI embeddings, Vertex AI Vector Search, Cloud Storage, Secret Manager, Cloud Run), switched by one setting: `APP_MODE`.
 
-> The "checks" in the audit are done by the AI from its general knowledge (only the exchange-rate check uses a live data source). This is a demo of how such a system is built, **not** a real compliance tool.
+The sample company, *Aldermoor Industries*, and the documents in `sample_docs/` are fictional.
 
-**New here? Read the [Learner Guide](docs/README.md)**: the story, every file explained, exercises and examples.
-
-**Jump to:** [Learn in depth](#learn-in-depth) · [Technologies](#the-technologies-in-plain-words) · [How it fits together](#how-it-fits-together) · [Why many files?](#why-is-the-code-split-into-many-files) · [What is in this repo](#whats-in-this-repo) · [Run it on your computer](#run-it-on-your-computer) · [Why the cloud?](#why-would-you-need-the-cloud) · [Settings](#settings) · [Problems](#common-problems)
+**Jump to:** [Architecture](#architecture) · [Tech stack](#tech-stack) · [Design decisions](#design-decisions) · [Repository layout](#repository-layout) · [Run locally](#run-locally) · [Deploy](#deploy-to-google-cloud) · [Settings](#settings) · [Limitations](#limitations-and-next-steps) · [Troubleshooting](#troubleshooting)
 
 ---
 
-## Learn in depth
-
-This README is the short version. The [`docs/`](docs/README.md) folder explains everything step by step:
-
-| If you want to… | Read |
-|---|---|
-| Understand the problem the app solves | [The case](docs/01-the-case.md) |
-| See how it all fits together | [The big picture](docs/02-the-big-picture.md) |
-| Learn the basic words (repo, `.env`, API…) | [Basics for newcomers](docs/03-basics-for-newcomers.md) |
-| See every folder and **why the code is split** | [Project tour](docs/04-project-tour.md) |
-| Understand every file | [Backend](docs/05-backend-files.md) · [Frontend](docs/06-frontend-files.md) · [Root files](docs/07-root-and-config-files.md) |
-| Follow a request from button to answer | [Follow a request](docs/08-follow-a-request.md) |
-| Learn FastAPI, settings and logging, RAG, agents | [09](docs/09-fastapi-explained.md) · [10](docs/10-settings-and-logging.md) · [11](docs/11-rag-explained.md) · [12](docs/12-agents-explained.md) |
-| See how it is packed and set up in the cloud | [Docker](docs/13-docker-and-cloud-run.md) · [GitHub Actions](docs/14-provisioning-and-github-actions.md) |
-| Check what you need, and the **$300 free credit** | [Requirements and costs](docs/15-requirements-accounts-costs.md) |
-| Practise | [Exercises](docs/16-exercises.md) · [runnable examples](docs/examples/README.md) |
-| Fix an error | [Troubleshooting](docs/18-troubleshooting.md) |
-
-> **Is Terraform used?** No. The cloud is set up by GitHub Actions running `gcloud` commands (see [docs/14](docs/14-provisioning-and-github-actions.md)).
-
----
-
-## The technologies, in plain words
-
-Think of a **restaurant**. Each technology plays one part.
-
-| Technology | What it is | Restaurant analogy |
-|---|---|---|
-| **React** (frontend) | The web page you click on | The dining room, menu and buttons |
-| **FastAPI** (Python) | Receives requests from the page and sends back answers | The **waiter**: takes your order to the kitchen and brings the food back |
-| **Pydantic** | Checks that requests are filled in correctly | The order form: "you forgot the table number" |
-| **LangChain** | A toolkit for connecting AI steps together | The kitchen's recipe book and workflow |
-| **Gemini** (Google's AI model) | Reads text and writes answers | The **chef** |
-| **Embeddings** | Turn text into a list of numbers that capture its *meaning* | GPS coordinates for ideas: similar ideas get nearby coordinates |
-| **Vertex AI Vector Search** | A database that finds the stored text closest in meaning to your question | A library catalogue organised by *meaning*, not by title |
-| **Chroma** | The same kind of database, but a folder on your laptop (used when `APP_MODE=local`) | A home bookshelf with the same catalogue system |
-| **RAG** (Retrieval-Augmented Generation) | Find the right pages first, then answer from them | An **open-book exam**: the chef checks the cookbook before answering |
-| **Agents and tools** | AI that can decide to run small programs (tools) to get facts | A chef who can use a scale, a thermometer and a timer |
-| **Middleware** (LangChain v1) | Checks that wrap every agent step: hide e-mails, stop loops, retry errors, log tool calls | The kitchen's head of hygiene and safety, watching every step |
-| **Cloud Storage** | Keeps files in Google Cloud | A filing cabinet |
-| **Docker** | Packs the app and everything it needs into one box | A lunchbox: opens the same anywhere |
-| **Cloud Run** | Runs that box on the internet, only when someone visits | A pop-up shop that opens only when customers arrive |
-| **Secret Manager** | Stores passwords and keys safely | A safe |
-| **GitHub Actions** | Builds and delivers the app automatically | A delivery robot |
-| **Logging** (structlog) | The app writes down what it does | The kitchen's diary: when something goes wrong, you read it |
-
----
-
-## How it fits together
+## Architecture
 
 ```
- YOU (browser)
-   │  click "Ask"
-   ▼
- FRONTEND (React)                       the dining room
-   │  sends a request
-   ▼
- BACKEND (FastAPI)                      the waiter
+ Browser
    │
-   ├── Document Q&A (RAG) ───────────┐
-   │     1. cut PDFs into small pieces│   Vertex AI: turns pieces into numbers
-   │     2. store them ───────────────┼─► Vector Search: finds pieces closest to your question
-   │     3. find pieces for question ◄┘
-   │     4. ask Gemini to answer from those pieces ─► Gemini
+   ▼
+ Frontend (React + TypeScript, Vite)
+   │  REST (src/lib/api.ts)
+   ▼
+ Backend (FastAPI)
+   │
+   ├── Document Q&A (RAG)
+   │     1. PDF → chunks (recursive splitter with overlap)
+   │     2. chunks → embeddings ──────────► Gemini / Vertex AI embeddings
+   │     3. store ────────────────────────► Chroma (local) | Vertex AI Vector Search (cloud)
+   │     4. question → top-k chunks ◄──────┘
+   │     5. grounded prompt ──────────────► Gemini
    │
    └── Purchase audit (agents)
          Risk agent    ─ tools ┐
-         Tax agent     ─ tools ├─► each calls Gemini, then a "CFO" step writes the memo
+         Tax agent     ─ tools ├─► Gemini ─► CFO synthesis ─► memo + decision
          Control agent ─ tools ┘
+         (LangChain v1 middleware: PII redaction, call limits, retries, tool-call logging)
 ```
 
-**What happens when you ask a question**
+**RAG request flow:** the question is embedded, the vector store returns the three nearest chunks, and Gemini answers using only that context.
 
-1. You type a question in the page. The page sends it to the backend.
-2. The backend turns your question into numbers (an embedding).
-3. Vector Search returns the three stored pieces of your documents closest to it.
-4. The backend gives Gemini those pieces and your question: *"Answer using only this."*
-5. Gemini's answer travels back to your page.
-
-**What happens when you run an audit**
-
-1. You submit a purchase request.
-2. The *risk*, *tax* and *control* agents each read it. Each one decides which tools to use (for example, "check the exchange rate") and writes a short report.
-3. A final step reads the three reports and writes one memo with a decision: **approved**, **conditional hold**, or **rejected**.
+**Audit flow:** each specialist agent decides which tools to call (e.g. a live FX-rate lookup), writes a short report, and the CFO step reads all three reports and produces the final memo.
 
 ---
 
-## Why is the code split into many files?
+## Tech stack
 
-You could put everything in one file. For a ten-line experiment that is fine. For a real app it becomes a problem. Think of a kitchen where everyone cooks on one table: you cannot find anything, people get in each other's way, and one spill ruins every dish.
-
-The app is split so that **each folder and file has one job**, like stations in a kitchen:
-
-| Problem with one big file | How splitting helps |
+| Layer | Technology |
 |---|---|
-| Hard to find things ("where is the tax prompt?") | The name tells you where to look |
-| Changing one thing can break another | A change stays inside its own file |
-| Hard to test ("it needs the internet just to start") | Parts can be tested alone |
-| Copy-pasted code drifts apart | One function is written once and reused |
-| Many people editing the same file clash | People work in different files |
-| Intimidating to read | Read one small file at a time |
-
-**Rule of thumb:** *one file, one job.* The web layer does not know how AI works. The AI code does not know what a web address is.
-
----
-
-## What's in this repo
-
-```
-backend/                      The Python server
-├── api/                      The "waiter": web addresses and rules
-│   ├── main.py                 Creates the app and plugs everything together
-│   ├── endpoints.py            Every web address (e.g. POST /api/rag/ask)
-│   └── schemas.py              The shape of requests and replies (the order forms)
-├── rag/                      Document Q&A (the "library")
-│   ├── llm.py                  Gets the Gemini chat model
-│   ├── embeddings.py           Text → numbers
-│   ├── vector_store.py         Connects to Vector Search
-│   ├── data_ingestion.py       PDF → pieces → stored
-│   └── retrieval.py            Question → find pieces → answer
-├── agent/                    The purchase audit
-│   ├── tools.py                The five tools agents can use
-│   ├── prompts.py              The written instructions for each agent
-│   └── agents.py               Creates the agents and runs them in order
-├── config/settings.py        Reads settings (keys, names) from outside the code
-├── logger/custom_logger.py   The app's diary (JSON log lines)
-└── tests/                    Automatic checks that need no accounts
-
-frontend/                     The web page (React + TypeScript)
-└── src/lib/api.ts            The only file that talks to the backend
-
-sample_docs/                  Four made-up PDFs to try the app with
-docs/                         The learner guide (19 pages) and docs/examples/ (6 small programs)
-.github/workflows/deploy.yml  Robot that sets up the cloud and deploys the app
-Dockerfile                    Recipe to pack the app into one box
-requirements.txt              Python packages (exact versions)
-.env.example                  Template for your private settings
-DEPLOY.md                     How to put the app on the internet
-```
-
-Each package depends only on the ones below it:
-
-```
-api  →  rag, agent  →  config, logger
-```
+| Frontend | React, TypeScript, Vite |
+| API | FastAPI, Pydantic (request/response schemas), pydantic-settings |
+| LLM orchestration | LangChain v1 (agents, tools, middleware) |
+| Models | Gemini (chat), `gemini-embedding-001` (local) / `text-embedding-005` (cloud) |
+| Vector store | Chroma (local), Vertex AI Vector Search (cloud) |
+| Storage & secrets | Cloud Storage, Secret Manager |
+| Runtime | Docker, Cloud Run |
+| CI/CD | GitHub Actions (`gcloud`-based provisioning and deploy) |
+| Observability | structlog (JSON logs, shipped to Cloud Storage on shutdown) |
+| Testing | pytest, httpx, fake LLMs (no network or accounts required) |
 
 ---
 
-## Run it on your computer
+## Design decisions
 
-### What you need
+- **One switch for local vs cloud.** `APP_MODE` selects the embedding model, vector store and file storage; nothing else in the code branches on environment. Local mode needs only a Gemini API key.
+- **Layered packages.** `api → rag, agent → config, logger`. The web layer knows nothing about LLMs, and the RAG/agent code knows nothing about HTTP, so each part can be tested on its own.
+- **Lazy external clients.** Nothing external is created at import or start-up, so the server boots and the test suite runs without cloud credentials.
+- **Agent guardrails as middleware.** Model-call limits, tool-call limits, retries, PII redaction and tool-call logging wrap every agent step instead of being scattered through prompts.
+- **Structured logging.** Every event is one JSON line, which makes failures searchable locally and in Cloud Storage.
+- **Infrastructure via GitHub Actions + `gcloud`.** No Terraform; the workflow provisions the bucket, vector index, endpoint and Cloud Run service idempotently.
+
+More detail on the trade-offs is in [docs/17-why-built-this-way.md](docs/17-why-built-this-way.md) and [docs/20-local-cloud-and-middleware.md](docs/20-local-cloud-and-middleware.md).
+
+---
+
+## Repository layout
+
+```
+backend/
+├── api/                      FastAPI app
+│   ├── main.py                 App factory, middleware, routers
+│   ├── endpoints.py            Routes (e.g. POST /api/rag/ask, POST /api/agent/audit)
+│   └── schemas.py              Pydantic request/response models
+├── rag/                      Document Q&A
+│   ├── llm.py                  Gemini chat model
+│   ├── embeddings.py           Embedding model (per APP_MODE)
+│   ├── vector_store.py         Chroma / Vertex AI Vector Search
+│   ├── data_ingestion.py       PDF → chunks → vector store
+│   └── retrieval.py            Question → retrieve → grounded answer
+├── agent/                    Purchase audit
+│   ├── tools.py                Agent tools
+│   ├── prompts.py              Specialist and CFO prompts
+│   └── agents.py               Agent construction and orchestration
+├── config/settings.py        Typed settings from environment
+├── logger/custom_logger.py   structlog JSON logging
+├── exceptions/               Application errors
+└── tests/                    Offline test suite
+
+frontend/                     React + TypeScript UI (src/lib/api.ts is the only API client)
+sample_docs/                  Four fictional PDFs for trying the app
+docs/                         Architecture and component notes, runnable examples in docs/examples/
+.github/workflows/deploy.yml  Provisioning + deploy pipeline
+Dockerfile                    Production image
+DEPLOY.md                     Google Cloud deployment guide
+```
+
+---
+
+## Run locally
+
+### Prerequisites
 
 | For | You need |
 |---|---|
-| Everything | **Python 3.12**, **Git**. For the web page also **Node.js 20+** |
-| Local mode (audit **and** document Q&A) | Only a free **Gemini API key** from https://aistudio.google.com/apikey |
-| Cloud mode | A **Google Cloud** project (see [DEPLOY.md](DEPLOY.md)) |
+| Backend | Python 3.12, Git |
+| Frontend | Node.js 20+ |
+| Local mode (audit and Q&A) | A Gemini API key from https://aistudio.google.com/apikey |
+| Cloud mode | A Google Cloud project (see [DEPLOY.md](DEPLOY.md)) |
 
-### Local or cloud? One switch
-
-`APP_MODE` in `.env` decides where the app keeps its data. Nothing else in the code changes.
+### Local vs cloud mode
 
 | | `APP_MODE=local` (default) | `APP_MODE=cloud` |
 |---|---|---|
 | Chat model | Gemini API (API key) | Gemini API (key from Secret Manager) |
 | Embeddings | `gemini-embedding-001` via Gemini API | `text-embedding-005` via Vertex AI |
-| Vector database | **Chroma**, a folder on your disk (`.meridian/chroma`) | **Vertex AI Vector Search** |
+| Vector database | Chroma on disk (`.meridian/chroma`) | Vertex AI Vector Search |
 | Uploaded PDFs | `.meridian/uploads/` | Cloud Storage bucket |
-| Logs | `logs/` folder | `logs/` + copied to the bucket on shutdown |
-| Google Cloud project needed? | **No** | Yes |
+| Logs | `logs/` | `logs/` + copied to the bucket on shutdown |
 
-The System Status tab (and `GET /api/status`) shows which mode is running.
+`GET /api/status` (and the System Status tab) reports the active mode.
 
-### Quick start: everything locally (about 10 minutes, no Google Cloud)
+### Backend
 
 ```bash
-# 1. Get the code (or download the ZIP from GitHub and unzip it)
-git clone https://github.com/mayank953/meridian-ai-learner.git
-cd meridian-ai-learner
+git clone https://github.com/tirumani-ai/meridian-ai.git
+cd meridian-ai
 
-# 2. Make a private Python environment and install the packages
 python3.12 -m venv .venv
 source .venv/bin/activate            # Windows PowerShell: .venv\Scripts\Activate.ps1
 pip install -r requirements-dev.txt
 
-# 3. Create your settings file and add your Gemini key
-cp .env.example .env                 # Windows: copy .env.example .env
-#    open .env and set:  GOOGLE_API_KEY=your-key   (leave APP_MODE=local)
+cp .env.example .env                 # then set GOOGLE_API_KEY=... (keep APP_MODE=local)
 
-# 4. Start the backend
 uvicorn api.main:app --app-dir backend --reload --port 8080
 ```
 
-Now open **http://localhost:8080/docs**. This page is made automatically by FastAPI and lets you try every address:
+Open http://localhost:8080/docs for the interactive API. A sample audit request for `POST /api/agent/audit`:
 
-1. Open `GET /api/health` → **Try it out** → **Execute**. You should see `{"status": "ok"}`.
-2. Open `POST /api/agent/audit` → **Try it out**. Paste a request such as:
-   ```json
-   {"request_text": "Purchase of 200 PLC controllers from Takumi Controls Europe B.V. (Netherlands). Total 480,000 EUR. Origin JP, destination DE. FX rate quoted: 1 EUR = 163.5 JPY."}
-   ```
-   Press **Execute** and wait: several AI calls are happening, so it can take up to a minute or more.
-3. You get four texts: risk, tax and control reports, and the CFO memo. Wording changes each time (an AI writes it), but the layout stays the same.
+```json
+{"request_text": "Purchase of 200 PLC controllers from Takumi Controls Europe B.V. (Netherlands). Total 480,000 EUR. Origin JP, destination DE. FX rate quoted: 1 EUR = 163.5 JPY."}
+```
 
-> Run every command from the project's main folder. The app looks for `.env` in the folder where you start it.
+The response contains the risk, tax and control reports plus the CFO memo. An audit makes several model calls and can take a minute.
 
-### Add the web page (optional)
+Run commands from the repository root; settings are read from `.env` in the working directory.
 
-Open a **second terminal** and keep the backend running:
+### Frontend
 
 ```bash
 cd frontend
 npm install
-npm run dev
+npm run dev                          # http://localhost:3000
 ```
-
-Open **http://localhost:3000**.
 
 ### Try document Q&A
 
-Works in local mode with just your Gemini key (in cloud mode, see [DEPLOY.md](DEPLOY.md)):
-
 1. Upload the PDFs in `sample_docs/` (Index Documents tab, or `POST /api/rag/upload`).
-2. Ask: *"What is Aldermoor Industries total revenue in FY2024?"* → about **EUR 2.84 billion**.
-   Also try: *payment terms for servo motor suppliers* (Net-45), *customs duty on PLC controllers from Japan* (2.2 %), *depreciation of filling line equipment* (10 years).
-3. Ask something that is not in the documents. The answer should say it does not know.
+2. Ask: *"What is Aldermoor Industries total revenue in FY2024?"* → about **EUR 2.84 billion**. Other checks: payment terms for servo motor suppliers (Net-45), customs duty on PLC controllers from Japan (2.2 %), depreciation of filling line equipment (10 years).
+3. Ask something not covered by the documents; the answer should say it does not know.
 
-### Check that everything is wired up
+### Tests
 
 ```bash
 pytest backend/tests
 ```
 
-Expected: `17 passed`. These tests need no accounts and no internet: they include a full
-local run (PDF → Chroma → answer) and an agent run through the middleware, with fake AI models.
+17 tests, no accounts or network needed. They include an end-to-end local RAG run (PDF → Chroma → answer) and an agent run through the middleware, using fake models.
 
-### Run it in Docker (optional)
+### Docker
 
 ```bash
 docker build -t meridian-ai .
 docker run -p 8080:8080 --env-file .env -v "$(pwd)/.meridian:/app/.meridian" meridian-ai
 ```
 
-Then open http://localhost:8080. The box does not contain your `.env`, so you pass it in. The `-v` part keeps
-your local vector database and uploads on your disk, so they survive restarting the container.
+The volume keeps the local vector store and uploads across container restarts.
 
 ---
 
-## Why would you need the cloud?
+## Deploy to Google Cloud
 
-You do **not** need it to learn or to run every feature: local mode does it all on your laptop.
-You do need it for these reasons:
+The GitHub Actions workflow in `.github/workflows/deploy.yml` provisions the Cloud Storage bucket, Vertex AI Vector Search index and endpoint (and enables the required APIs, including Secret Manager), then builds the image and deploys it to Cloud Run. See [DEPLOY.md](DEPLOY.md) for setup, required secrets, costs and teardown.
 
-| Reason | Explanation |
-|---|---|
-| **A managed vector database** | Chroma on your disk is perfect for one person. **Vertex AI Vector Search** is shared, backed up and scales to millions of chunks. |
-| **Sharing** | On your laptop, only you can open `localhost`. In the cloud, anyone with the link can. |
-| **Always on** | Your laptop sleeps and goes offline. A cloud service keeps running. |
-| **Automatic delivery** | Each time you save changes, a robot can rebuild and publish the app. |
-| **Scaling** | Many users at once? The cloud can start more copies. |
-
-**It costs money.** The vector database is billed **by the hour while it is running, even if nobody uses it.** New Google Cloud customers get a **$300 credit for 90 days**. [DEPLOY.md](DEPLOY.md) explains the costs, how to set a budget alert, and how to switch everything off.
+> Vertex AI Vector Search endpoints are billed per hour while deployed, even when idle. Tear them down when not in use.
 
 ---
 
 ## Settings
 
-Settings live in `.env` (copy `.env.example`). `.env` is never uploaded to Git.
+Settings live in `.env` (copy `.env.example`). `.env` is git-ignored.
 
 | Setting | Meaning | Needed for |
 |---|---|---|
 | `APP_MODE` | `local` (default) or `cloud` | Always |
-| `GOOGLE_API_KEY` | Your Gemini key | Both modes |
+| `GOOGLE_API_KEY` | Gemini API key | Both modes |
 | `VERTEX_LLM_MODEL_NAME` | Chat model, default `gemini-3.8-flash` | Optional |
-| `LLM_TEMPERATURE` | `0` = most repeatable answers | Optional |
+| `LLM_TEMPERATURE` | Sampling temperature (`0` = most deterministic) | Optional |
 | `LOCAL_EMBEDDING_MODEL_NAME` | Default `gemini-embedding-001` | Optional, local |
-| `LOCAL_DATA_DIR` | Where Chroma and uploads live, default `.meridian/` | Optional, local |
+| `LOCAL_DATA_DIR` | Chroma and uploads location, default `.meridian/` | Optional, local |
 | `AGENT_MAX_MODEL_CALLS` / `AGENT_MAX_TOOL_CALLS` / `AGENT_MAX_RETRIES` | Middleware limits, defaults 8 / 6 / 2 | Optional |
-| `GCP_PROJECT_ID` | Your Google Cloud project | Cloud |
-| `GCP_REGION` | Where it runs, e.g. `us-central1` | Cloud |
-| `GCS_BUCKET_NAME` | Cloud Storage bucket name | Cloud |
-| `GCS_PREFIX` | Folder for uploads, `uploads/` | Cloud |
-| `VECTOR_SEARCH_INDEX_ID` | ID of your vector index | Cloud |
-| `VECTOR_SEARCH_INDEX_ENDPOINT_ID` | ID of its endpoint | Cloud |
-| `GCP_SERVICE_ACCOUNT_PATH` | Path to your key file | Cloud mode run from a laptop |
-| `VERTEX_EMBEDDING_MODEL_NAME` | Embedding model, default `text-embedding-005` | Optional, cloud |
+| `GCP_PROJECT_ID` | Google Cloud project | Cloud |
+| `GCP_REGION` | e.g. `us-central1` | Cloud |
+| `GCS_BUCKET_NAME` | Cloud Storage bucket | Cloud |
+| `GCS_PREFIX` | Upload prefix, `uploads/` | Cloud |
+| `VECTOR_SEARCH_INDEX_ID` | Vector Search index ID | Cloud |
+| `VECTOR_SEARCH_INDEX_ENDPOINT_ID` | Index endpoint ID | Cloud |
+| `GCP_SERVICE_ACCOUNT_PATH` | Service account key path | Cloud mode from a workstation |
+| `VERTEX_EMBEDDING_MODEL_NAME` | Default `text-embedding-005` | Optional, cloud |
 
-> AI model names are retired from time to time. If you see "model not found", look up a current name at https://ai.google.dev/gemini-api/docs/models and set `VERTEX_LLM_MODEL_NAME`.
+If you get "model not found", set `VERTEX_LLM_MODEL_NAME` to a current model from https://ai.google.dev/gemini-api/docs/models.
 
 ---
 
-## Common problems
+## Limitations and next steps
 
-| What you see | What to do |
+- **Audit tools are mostly LLM-backed.** Only the FX-rate tool calls a live data source; the sanctions, credit and tax checks use the model's general knowledge. A production version would call a sanctions-screening API, a credit bureau and a tax engine. The audit output is decision support, not a compliance determination.
+- **No authentication.** The Cloud Run service is deployed with `--allow-unauthenticated`; add IAP or an auth layer before using real documents.
+- **Logs contain prompts and answers.** Treat log files and the log bucket as sensitive.
+- **Retrieval is plain top-k similarity.** Hybrid search, re-ranking and an evaluation set would be the next improvements.
+
+---
+
+## Troubleshooting
+
+| Symptom | Fix |
 |---|---|
-| `ModuleNotFoundError: No module named 'api'` | Run from the main folder and keep `--app-dir backend` |
-| Settings seem empty | Run from the main folder (where `.env` is) |
-| `ModuleNotFoundError` for other packages | Activate the environment (`source .venv/bin/activate`) and run `pip install -r requirements.txt` |
-| `503` with "APP_MODE=cloud but these settings are empty" | Fill in the listed settings, or set `APP_MODE=local` |
-| `503` with "GOOGLE_API_KEY is empty" | Add your Gemini key to `.env` and restart |
-| Old answers after changing documents | Local mode: delete the `.meridian/` folder and upload again |
-| `403` from Google Cloud | Your login or key lacks permission, or the wrong account is used; see [DEPLOY.md](DEPLOY.md) |
-| "model not found" | Change `VERTEX_LLM_MODEL_NAME` to a current model |
-| Port already in use | Stop the other program, or use `--port 8081` |
-| Browser says "blocked by CORS" | The backend is not running on port 8080 |
+| `ModuleNotFoundError: No module named 'api'` | Run from the repo root with `--app-dir backend` |
+| Settings appear empty | Run from the repo root (where `.env` is) |
+| Other `ModuleNotFoundError` | Activate `.venv` and `pip install -r requirements.txt` |
+| `503` "APP_MODE=cloud but these settings are empty" | Fill in the listed settings or set `APP_MODE=local` |
+| `503` "GOOGLE_API_KEY is empty" | Add the key to `.env` and restart |
+| Stale answers after changing documents | Local mode: delete `.meridian/` and re-upload |
+| `403` from Google Cloud | Check the active account and IAM roles; see [DEPLOY.md](DEPLOY.md) |
+| "model not found" | Update `VERTEX_LLM_MODEL_NAME` |
+| Port already in use | Use `--port 8081` |
+| CORS error in the browser | The backend is not running on port 8080 |
 
-When something fails, read the last lines in the terminal. The app writes a diary of what it did as one JSON line per event; the error is usually there.
+The backend logs one JSON line per event; the failing step is usually in the last few lines.
+
+More: [docs/18-troubleshooting.md](docs/18-troubleshooting.md).
 
 ---
 
-*Aldermoor Industries and all sample data are fictional.*
+## Acknowledgements
+
+Built while working through the Meridian AI course by Mayank ([reference implementation](https://github.com/mayank953/meridian-ai-learner)). Project scaffolding, sample documents and parts of the configuration follow that reference.

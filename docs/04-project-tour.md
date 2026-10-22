@@ -7,7 +7,7 @@ Every folder, why it exists, and why the code is split into many files.
 ## 1. The whole repository
 
 ```
-meridian-ai-learner/
+meridian-ai/
 │
 ├── backend/                  PYTHON: the server (the "kitchen")
 ├── frontend/                 TYPESCRIPT/REACT: the screens (the "dining room")
