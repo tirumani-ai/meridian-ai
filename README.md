@@ -244,9 +244,3 @@ If you get "model not found", set `VERTEX_LLM_MODEL_NAME` to a current model fro
 | CORS error in the browser | The backend is not running on port 8080 |
 
 The backend logs one JSON line per event; the failing step is usually in the last few lines.
-
----
-
-## Acknowledgements
-
-Built while working through the Meridian AI course by Mayank ([reference implementation](https://github.com/mayank953/meridian-ai-learner)). Project scaffolding, sample documents and parts of the configuration follow that reference.
