@@ -133,14 +133,14 @@ DEPLOY.md                     Google Cloud deployment guide
 git clone https://github.com/tirumani-ai/meridian-ai.git
 cd meridian-ai
 
-python3.12 -m venv .venv
-source .venv/bin/activate            # Windows PowerShell: .venv\Scripts\Activate.ps1
-pip install -r requirements-dev.txt
+uv sync                              # creates .venv with Python 3.12 and the locked dependencies
 
 cp .env.example .env                 # then set GOOGLE_API_KEY=... (keep APP_MODE=local)
 
-uvicorn api.main:app --app-dir backend --reload --port 8080
+uv run uvicorn api.main:app --app-dir backend --reload --port 8080
 ```
+
+Requires [uv](https://docs.astral.sh/uv/getting-started/installation/). Dependencies are declared in `pyproject.toml` and locked in `uv.lock`; use `uv add` / `uv remove` to change them.
 
 Open http://localhost:8080/docs for the interactive API. A sample audit request for `POST /api/agent/audit`:
 
@@ -169,7 +169,7 @@ npm run dev                          # http://localhost:3000
 ### Tests
 
 ```bash
-pytest backend/tests
+uv run pytest backend/tests
 ```
 
 17 tests, no accounts or network needed. They include an end-to-end local RAG run (PDF → Chroma → answer) and an agent run through the middleware, using fake models.
@@ -234,7 +234,7 @@ If you get "model not found", set `VERTEX_LLM_MODEL_NAME` to a current model fro
 |---|---|
 | `ModuleNotFoundError: No module named 'api'` | Run from the repo root with `--app-dir backend` |
 | Settings appear empty | Run from the repo root (where `.env` is) |
-| Other `ModuleNotFoundError` | Activate `.venv` and `pip install -r requirements.txt` |
+| Other `ModuleNotFoundError` | Run `uv sync`, and start commands with `uv run` |
 | `503` "APP_MODE=cloud but these settings are empty" | Fill in the listed settings or set `APP_MODE=local` |
 | `503` "GOOGLE_API_KEY is empty" | Add the key to `.env` and restart |
 | Stale answers after changing documents | Local mode: delete `.meridian/` and re-upload |
