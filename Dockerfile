@@ -21,8 +21,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     && rm -rf /var/lib/apt/lists/*
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Install uv, then the exact versions from uv.lock (without dev dependencies)
+COPY --from=ghcr.io/astral-sh/uv:0.9.26 /uv /usr/local/bin/uv
+COPY pyproject.toml uv.lock .python-version ./
+RUN uv sync --frozen --no-dev --no-cache --no-python-downloads
+
+# Put the project environment first on PATH so uvicorn resolves to it
+ENV PATH="/app/.venv/bin:$PATH"
 
 # Copy backend application code
 COPY backend/ ./backend/

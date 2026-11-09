@@ -3,6 +3,9 @@ __pycache__/
 *.py[codz]
 *$py.class
 
+# Local virtual environment (Docker builds its own from uv.lock)
+.venv/
+
 # Environment & credentials (injected via Cloud Run env vars / Secret Manager)
 .env
 .env.*
